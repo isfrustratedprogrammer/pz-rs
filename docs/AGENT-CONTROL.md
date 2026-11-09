@@ -165,9 +165,10 @@ each run deletes the previous save of that name first.
   non-table: null` (126 in 600 frames with the cursor left at (0, 0)): the
   hotbar, equipment and inventory UI call `getPlayerContextMenu()`, which
   is nil when `ISPlayerDataObject:createInventoryInterface` aborts. It
-  aborts only when an object with containers is near the spawn, because
-  `IsoObject.getContainerByIndex` is not ported: world-object containers
-  are not shared with Lua. Spawns without containers nearby are clean.
+  aborts only when an unexplored container is near the spawn:
+  `ISInventoryPage:checkExplored` calls `ItemPicker.fillContainer`, and
+  `ItemPickerJava` (the loot distributions) is not ported. Spawns without
+  containers nearby are clean.
 - `ItemCodeOnCreate.*` `no_such_function` lines are expected: most item
   OnCreate handlers are not ported yet (RecipeMagazine, RandomColor and
   IDCard are).
