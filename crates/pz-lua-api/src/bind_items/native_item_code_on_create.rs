@@ -1,6 +1,7 @@
 //! Genuine static ItemCodeOnCreate entry points over actual item allocations.
 //!
-//! Only onCreateRecipeMagazine is implemented. Other declared handlers, the
+//! Implemented: onCreateRecipeMagazine, onCreateRandomColor and
+//! onCreateIDCard (with the Female and Male forms). Other declared handlers, the
 //! public constructor, inherited helpers and factory/callback phase parity are
 //! separate capabilities; no replacement Lua callbacks are installed here.
 
@@ -119,9 +120,96 @@ fn invoke(call: &mut NativeCall<'_>) -> LuaResult<usize> {
     }
 }
 
+/// An `InventoryItem` argument of a static handler; a Java null faults in
+/// the body with a NullPointerException.
+fn item_argument(call: &NativeCall<'_>, handler: &str) -> LuaResult<ItemRef> {
+    match call.arg(0) {
+        Value::Object(object) => match (&*object as &dyn std::any::Any).downcast_ref::<LuaInventoryItem>() {
+            Some(known) => Ok(known.item.clone()),
+            None => Err(argument_type_error(&Value::Object(object.clone()))),
+        },
+        Value::Nil => Err(pz_kahlua::LuaError::Runtime {
+            message: format!("ItemCodeOnCreate.{handler}: item is null"),
+            class: "java.lang.NullPointerException",
+        }),
+        other => Err(argument_type_error(&other)),
+    }
+}
+
+fn borrowed(what: &'static str) -> pz_kahlua::LuaError {
+    ModDataError::Borrowed(what).to_lua_error()
+}
+
+/// `onCreateRandomColor(item)`: `setCustomColor(item, Color.random())`,
+/// that is `setColor(c)`, `setColorRed/Green/Blue(c.r/g/b)` and
+/// `setCustomColor(true)`. `Color.random()` is `Colors.GetRandomColor()`.
+fn on_create_random_color(call: &mut NativeCall<'_>) -> LuaResult<usize> {
+    let item = item_argument(call, "onCreateRandomColor")?;
+    let color = crate::bind_colors::random_color(false).ok_or_else(|| {
+        ModDataError::Unsupported("Colors are not initialised").to_lua_error()
+    })??;
+    let [r, g, b, a] = [color.r.get(), color.g.get(), color.b.get(), color.a.get()];
+    let mut body = item
+        .try_borrow_mut()
+        .map_err(|_| borrowed("ItemCodeOnCreate.onCreateRandomColor"))?;
+    body.col = [r, g, b, a];
+    body.color_red = r;
+    body.color_green = g;
+    body.color_blue = b;
+    body.custom_color = true;
+    Ok(0)
+}
+
+/// `onCreateIDCard(item, female)`: the name becomes
+/// `getText("IGUI_ItemWithDisplayName", getDisplayName(), forename + " " +
+/// surname)`; Literature also gets `lockedBy = String.valueOf(Rand.Next(1000000))`.
+fn on_create_id_card(item: &ItemRef, female: bool) -> LuaResult<()> {
+    let display = {
+        let body = item.try_borrow().map_err(|_| borrowed("ItemCodeOnCreate.onCreateIDCard"))?;
+        crate::bind_item_name::display_name(&body, super::env().as_ref())
+    };
+    let (forename, surname) = {
+        let chars = crate::bind_characters::shared_characters();
+        let chars = chars.try_borrow().map_err(|_| borrowed("SurvivorFactory"))?;
+        let forename = chars.random_forename(female).map_err(|e| pz_kahlua::LuaError::runtime(e.to_string()))?;
+        let surname = chars.random_surname().map_err(|e| pz_kahlua::LuaError::runtime(e.to_string()))?;
+        (forename, surname)
+    };
+    let args = [
+        pz_text::jfmt::JavaArg::Str(display),
+        pz_text::jfmt::JavaArg::Str(format!("{forename} {surname}")),
+    ];
+    let key = "IGUI_ItemWithDisplayName";
+    let name = crate::bind_text::with_translator(|t| t.get_text(key, &args)).unwrap_or_else(|| key.to_owned());
+    let mut body = item.try_borrow_mut().map_err(|_| borrowed("ItemCodeOnCreate.onCreateIDCard"))?;
+    body.set_name(&name);
+    if let pz_inventory::ItemKind::Literature(data) = &mut body.kind {
+        data.locked_by = Some(pz_core::random::next(1_000_000).to_string());
+    }
+    Ok(())
+}
+
 pub(super) fn register(thread: &mut Thread) {
     let class = crate::expose::expose_class(thread, CLASS, Some(SUPERCLASS));
     class.static_fn("onCreateRecipeMagazine", invoke);
+    class.static_fn("onCreateRandomColor", on_create_random_color);
+    // onCreateIDCard(item): onCreateIDCard(item, Rand.NextBool(2)).
+    class.static_fn("onCreateIDCard", |call| {
+        let item = item_argument(call, "onCreateIDCard")?;
+        let female = pz_core::random::next(2) == 0;
+        on_create_id_card(&item, female)?;
+        Ok(0)
+    });
+    class.static_fn("onCreateIDCardFemale", |call| {
+        let item = item_argument(call, "onCreateIDCardFemale")?;
+        on_create_id_card(&item, true)?;
+        Ok(0)
+    });
+    class.static_fn("onCreateIDCardMale", |call| {
+        let item = item_argument(call, "onCreateIDCardMale")?;
+        on_create_id_card(&item, false)?;
+        Ok(0)
+    });
 }
 
 #[cfg(test)]
@@ -439,5 +527,47 @@ mod tests {
         }
         pz_inventory::component_host::drain_retired_components();
         assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn random_color_and_id_card_handlers_write_the_item_like_the_java_bodies() {
+        let mut thread = thread();
+        let mut colors = crate::bind_colors::Colors::default();
+        colors.add_color(
+            "Only",
+            Rc::new(crate::bind_misc_classes::Color::rgba(0.25, 0.5, 0.75, 1.0)),
+        );
+        crate::bind_colors::register_with(&mut thread, colors);
+        {
+            let chars = crate::bind_characters::shared_characters();
+            let mut chars = chars.borrow_mut();
+            chars.add_female_forename("Kate");
+            chars.add_male_forename("Bob");
+            chars.add_surname("Smith");
+        }
+        let item = actual(&mut thread, ItemClass::Literature, "IDcard");
+        let result = run(
+            &mut thread,
+            r#"
+            ItemCodeOnCreate.onCreateRandomColor(item)
+            ItemCodeOnCreate.onCreateIDCardFemale(item)
+            return pcall(ItemCodeOnCreate.onCreateIDCardMale, nil)
+            "#,
+        );
+        assert!(matches!(result[0], Value::Bool(false)));
+        let body = item.borrow();
+        assert!(body.custom_color);
+        assert_eq!(body.col, [0.25, 0.5, 0.75, 1.0]);
+        assert_eq!(
+            [body.color_red, body.color_green, body.color_blue],
+            [0.25, 0.5, 0.75]
+        );
+        // No translator is installed, so getText returns its key.
+        assert_eq!(body.name, "IGUI_ItemWithDisplayName");
+        let ItemKind::Literature(data) = &body.kind else {
+            unreachable!()
+        };
+        let lock: i32 = data.locked_by.as_deref().unwrap().parse().unwrap();
+        assert!((0..1_000_000).contains(&lock));
     }
 }

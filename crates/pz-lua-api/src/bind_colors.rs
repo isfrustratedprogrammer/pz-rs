@@ -147,7 +147,7 @@ fn lower(s: &str) -> String {
 
 impl Colors {
     /// `addColor(name, color)` (standard set).
-    fn add_color(&mut self, name: &str, color: Rc<Color>) -> Rc<Color> {
+    pub(crate) fn add_color(&mut self, name: &str, color: Rc<Color>) -> Rc<Color> {
         let nfo = Rc::new(ColNfo::new(name, color.clone(), ColorSet::Standard));
         self.main.info_map.insert(name.to_string(), nfo.clone());
         self.info_list.push(nfo);
@@ -324,14 +324,20 @@ fn table(c: &mut Colors, cb: bool) -> &mut Table {
     }
 }
 
+/// `Colors.GetRandomColor()` (`cb`: the colour-blind table); `None`
+/// before the colours are set up.
+pub(crate) fn random_color(cb: bool) -> Option<LuaResult<Rc<Color>>> {
+    with(|s| {
+        let t = table(s, cb);
+        let i = pz_core::random::next_range(0, t.colors.len() as i32 - 1);
+        get_index(&t.colors, i)
+    })
+}
+
 fn register_table_fns(b: &crate::expose::ClassBuilder, prefix: &str, cb: bool) {
     let n = |s: &str| format!("{prefix}{s}");
     b.static_fn(&n("GetRandomColor"), move |c| {
-        let col = with(|s| {
-            let t = table(s, cb);
-            let i = pz_core::random::next_range(0, t.colors.len() as i32 - 1);
-            get_index(&t.colors, i)
-        });
+        let col = random_color(cb);
         Ok(c.push(match col {
             Some(r) => color_value(&r?),
             None => Value::Nil,
