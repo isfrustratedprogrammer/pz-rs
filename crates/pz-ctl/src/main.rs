@@ -46,7 +46,7 @@ A game in the background (one command per step):
 
 Without a background game:
   session [CLIENT ARGS]    JSON commands on stdin, replies on stdout
-  scenarios [--out DIR] [NAME...]
+  scenarios [--out DIR] [--spawn X,Y,Z] [NAME...]
                            run the checks and print PASS/FAIL (exit 1 on FAIL)
   list                     list the scenarios
 ";
@@ -266,11 +266,14 @@ fn session(g: &Global, client_args: &[String]) -> Result<i32, String> {
 
 fn run_scenarios(g: &Global, rest: &[String]) -> Result<i32, String> {
     let mut out = None;
+    let mut spawn = None;
     let mut only = Vec::new();
     let mut it = rest.iter();
     while let Some(a) = it.next() {
         if a == "--out" {
             out = it.next().map(|o| absolute(o.clone()));
+        } else if a == "--spawn" {
+            spawn = Some(it.next().ok_or("--spawn needs X,Y,Z")?.clone());
         } else {
             if !scenarios::ALL.iter().any(|s| s.name == a) {
                 return Err(format!("unknown scenario {a} (see `pz-ctl list`)"));
@@ -280,7 +283,7 @@ fn run_scenarios(g: &Global, rest: &[String]) -> Result<i32, String> {
     }
     let opts = g.options("unused.log")?;
     let out = out.unwrap_or_else(|| opts.cache_dir.join("pz-ctl").join("report"));
-    let env = scenarios::Env { opts, out: out.clone() };
+    let env = scenarios::Env { opts, out: out.clone(), spawn };
     let report = scenarios::run(&env, &only);
     print!("{}", scenarios::summary(&report));
     println!("report: {}", out.join("report.json").display());

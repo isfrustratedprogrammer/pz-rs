@@ -11,6 +11,9 @@ pub struct Env {
     pub opts: Options,
     /// Screenshots, logs and `report.json`.
     pub out: PathBuf,
+    /// `X,Y,Z` for every new game (`pz-client --spawn`); `None`: the
+    /// game's random spawn.
+    pub spawn: Option<String>,
 }
 
 type Check = fn(&Env, &mut Outcome) -> Result<String, String>;
@@ -45,7 +48,7 @@ pub struct Outcome {
 const KNOWN: &[(&str, &str)] = &[
     ("bounded scratch component writer", "PlayerDB save: bounded scratch component writer is unsupported"),
     ("IsoPlayer.getInstance() is null", "--load-game: IsoPlayer.getInstance() is null"),
-    ("isAnyVisible of non-table", "getPlayerContextMenu() returns nil: ISPlayerDataObject:createInventoryInterface aborts when an unexplored container is near the spawn, because ItemPicker.fillContainer (ItemPickerJava, the loot distributions) is not ported"),
+    ("isAnyVisible of non-table", "getPlayerContextMenu() returns nil: ISPlayerDataObject:createInventoryInterface aborted in refreshBackpacks (see the first Lua error above it; often a loot window handler calls an IsoObject method pz-rs does not expose)"),
     ("require_failed", "a Lua module that loads in the original fails to require (the 9 vanilla failures count as warnings)"),
     ("no_such_function", "ItemCodeOnCreate handlers not ported (GasMask, SubjectBook, ...; RandomColor, IDCard and RecipeMagazine are)"),
 ];
@@ -120,6 +123,15 @@ struct Session<'a> {
     frame: u64,
 }
 
+/// `pz-client` arguments of a new game in `world`, at `spawn` if given.
+fn new_game_args(world: String, spawn: Option<&str>) -> Vec<String> {
+    let mut args = vec!["--new-game".into(), world];
+    if let Some(spawn) = spawn {
+        args.extend(["--spawn".into(), spawn.into()]);
+    }
+    args
+}
+
 const MAIN_MENU: &str = "zombie.gameStates.MainScreenState";
 const INGAME: &str = "zombie.gameStates.IngameState";
 
@@ -135,7 +147,7 @@ impl<'a> Session<'a> {
     fn new_game(env: &'a Env, name: &'a str) -> Result<Self, String> {
         let world = format!("pzctl-{name}");
         let _ = std::fs::remove_dir_all(env.opts.cache_dir.join("Saves").join("Sandbox").join(&world));
-        Self::start(env, name, &["--new-game".into(), world])
+        Self::start(env, name, &new_game_args(world, env.spawn.as_deref()))
     }
 
     /// Send a command; a failed command or an engine error is an `Err`.
@@ -537,6 +549,15 @@ mod tests {
             ]},
             {"type": "SurvivalGuide", "text": "Survival Guide", "rect": [0, 0, 1, 1]}
         ])
+    }
+
+    #[test]
+    fn new_game_args_add_the_spawn_when_given() {
+        assert_eq!(new_game_args("w".into(), None), ["--new-game", "w"]);
+        assert_eq!(
+            new_game_args("w".into(), Some("10721,10630,0")),
+            ["--new-game", "w", "--spawn", "10721,10630,0"]
+        );
     }
 
     #[test]

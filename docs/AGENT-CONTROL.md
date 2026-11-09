@@ -130,6 +130,7 @@ the snapshot reads through Lua.
 pz-ctl --cache-dir ../pz-cache list
 pz-ctl --cache-dir ../pz-cache scenarios                    # all
 pz-ctl --cache-dir ../pz-cache scenarios menu walk --out ../pz-ctl-report
+pz-ctl --cache-dir ../pz-cache scenarios --spawn 10721,10630,0  # fixed spawn
 ```
 
 Each scenario boots its own game process. The output is a PASS/FAIL line per
@@ -151,7 +152,9 @@ scenario and a summary; `--out` (default `<cache-dir>/pz-ctl/report`) gets
 | `save-load` | Quit saves the game, and `--load-game` of that save reaches `IngameState` with a player. A failed save still tries the load and reports both. |
 
 New games are created as `pzctl-<scenario>` under `<cache-dir>/Saves/Sandbox`;
-each run deletes the previous save of that name first.
+each run deletes the previous save of that name first. `--spawn X,Y,Z` puts
+every new game at that point (`pz-client --spawn`); without it the spawn is
+random. (10721, 10630, 0) is a house with about 25 containers.
 
 ## Things to know
 
@@ -161,14 +164,35 @@ each run deletes the previous save of that name first.
   on quit is intermittent: with the same spawn point and frame count it
   sometimes saves and sometimes fails. `save-load` therefore passes on some
   runs and fails on others.
-- In the world the log can fill with `attempted index: isAnyVisible of
-  non-table: null` (126 in 600 frames with the cursor left at (0, 0)): the
-  hotbar, equipment and inventory UI call `getPlayerContextMenu()`, which
-  is nil when `ISPlayerDataObject:createInventoryInterface` aborts. It
-  aborts only when an unexplored container is near the spawn:
-  `ISInventoryPage:checkExplored` calls `ItemPicker.fillContainer`, and
-  `ItemPickerJava` (the loot distributions) is not ported. Spawns without
-  containers nearby are clean.
+- `attempted index: isAnyVisible of non-table: null` in the world log means
+  `ISPlayerDataObject:createInventoryInterface` aborted, so
+  `getPlayerContextMenu()` is nil for the hotbar, equipment and inventory UI.
+  The first Lua error above it is the cause. With filled containers it is
+  usually a loot window handler (`refreshBackpacks` → `shouldBeVisible`)
+  that calls an `IsoObject` method pz-rs does not expose yet.
+- Loot (`ItemPickerJava`, `crates/pz-lua-api/src/item_picker.rs` and
+  `bind_item_picker.rs`): world containers are filled once when their square
+  loads (`LoadGridsquarePerformanceWorkaround`), and by
+  `ItemPicker.fillContainer` from Lua. Ported: the distribution tables,
+  rooms and fallbacks, junk and main rolls, the spawn chance with the
+  sandbox loot settings and zombie intensity, procedural lists with their
+  `forceFor*` rules, a full container stopping the roll, `explored` and
+  `isOverlayDone`. Not ported, with rough estimates:
+  - the item post-processing in `doRollItem` (`ItemConfigurator`, keys and
+    `KeyNamer`, stashes, recorded media, age, conditions, firearms,
+    clothing from washers, `spawnWith`): 2–3 days;
+  - the bags' own loot (`rollContainerItem`): about half a day;
+  - the zone part of `getCurrentLootMultiplier(square)`: about 2 hours;
+  - overlay sprites (`updateOverlaySprite`, `TileOverlays`): about 1 day;
+  - vehicle distributions (`fillVehicle*`): 1–2 days;
+  - `RoomDef.proceduralSpawnedContainer` lives in memory only and is not
+    saved: about half a day with the map save.
+- The inventory and loot windows open, but their item lists draw no rows:
+  `ISInventoryPane:renderdetails` calls `InventoryItem` methods that are not
+  exposed (`getInvHeat`, `getItemHeat`, `getHeat`, `getJobDelta`,
+  `getJobType`, `isTainted`, `isFrozen`, `isFavouriteRecipeInput`,
+  `updateWetness`) and `Core.getOptionByName`. This is the same for the
+  player's own inventory.
 - `ItemCodeOnCreate.*` `no_such_function` lines are expected: most item
   OnCreate handlers are not ported yet (RecipeMagazine, RandomColor and
   IDCard are).
