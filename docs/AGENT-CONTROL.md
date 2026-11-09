@@ -157,10 +157,6 @@ each run deletes the previous save of that name first.
 
 - New games spawn at a random point of the map, so two runs differ. Pass
   `--spawn X,Y,Z` (and `--seed`) after `start` for a fixed one.
-- The `PlayerDB save host failure: ... bounded scratch component writer`
-  on quit is intermittent: with the same spawn point and frame count it
-  sometimes saves and sometimes fails. `save-load` therefore passes on some
-  runs and fails on others.
 - In the world the log can fill with `attempted index: isAnyVisible of
   non-table: null` (126 in 600 frames with the cursor left at (0, 0)): the
   hotbar, equipment and inventory UI call `getPlayerContextMenu()`, which

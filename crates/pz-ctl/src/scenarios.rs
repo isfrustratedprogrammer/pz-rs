@@ -43,7 +43,6 @@ pub struct Outcome {
 
 /// Known engine bugs (`docs/AGENT-CONTROL.md`), matched in failure reasons.
 const KNOWN: &[(&str, &str)] = &[
-    ("bounded scratch component writer", "PlayerDB save: bounded scratch component writer is unsupported"),
     ("IsoPlayer.getInstance() is null", "--load-game: IsoPlayer.getInstance() is null"),
     ("isAnyVisible of non-table", "getPlayerContextMenu() returns nil: ISPlayerDataObject:createInventoryInterface aborts when an unexplored container is near the spawn, because ItemPicker.fillContainer (ItemPickerJava, the loot distributions) is not ported"),
     ("require_failed", "a Lua module that loads in the original fails to require (the 9 vanilla failures count as warnings)"),
@@ -560,7 +559,7 @@ mod tests {
 
     #[test]
     fn known_bugs_are_recognised() {
-        assert!(known_bug("quit failed: PlayerDB save host failure: Unsupported { operation: \"bounded scratch component writer\" }").is_some());
+        assert!(known_bug("loading failed: --load-game: IsoPlayer.getInstance() is null").is_some());
         assert!(known_bug("something new").is_none());
     }
 
