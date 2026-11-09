@@ -871,7 +871,6 @@ fn melee(env: &Env, o: &mut Outcome) -> Result<String, String> {
             return Err("no zombie within 30 tiles".into());
         }
         let (zx, zy) = (f(&z["x"]), f(&z["y"]));
-        let total = snap["zombies"]["total"].as_u64().unwrap_or(0);
         let (px, py) = s
             .walk_to(zx, zy, 1.1)
             .map_err(|e| format!("walking to the nearest zombie at ({zx}, {zy}): {e}"))?;
@@ -899,12 +898,12 @@ fn melee(env: &Env, o: &mut Outcome) -> Result<String, String> {
             let standing = snap["zombies"]["nearby"]
                 .as_array()
                 .is_some_and(|a| a.iter().any(|z| (f(&z["x"]) - zx).abs() < 0.3 && (f(&z["y"]) - zy).abs() < 0.3));
-            let after = snap["zombies"]["total"].as_u64().unwrap_or(0);
-            if !standing || after < total {
+            // Not the zombie count: the population manager removes zombies
+            // elsewhere while the player fights.
+            if !standing {
                 s.shot(o, "after")?;
                 return Ok(format!(
-                    "the zombie at ({zx}, {zy}) went down after {swing} aimed clicks (zombies {total} -> {after}, \
-                     still at its spot: {standing}); action states {states:?}"
+                    "the zombie at ({zx}, {zy}) left its spot after {swing} aimed clicks; action states {states:?}"
                 ));
             }
         }
