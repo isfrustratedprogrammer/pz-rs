@@ -154,6 +154,7 @@ scenario and a summary; `--out` (default `<cache-dir>/pz-ctl/report`) gets
 | `eat` | Right-click on an apple's inventory row, Eat (and All) lower hunger from 0.5 within 400 frames. |
 | `equip` | Right-click on a bat's inventory row, Equip in Both Hands puts it in the primary hand. |
 | `melee` | With a bat in hand (set through Lua), the player walks with WASD to the nearest zombie, aims (LCONTROL) and clicks it; it must go down within 6 clicks. |
+| `door` | At the door at 10621,9911, E (or Open Door in the world context menu) changes `IsoDoor.IsOpen()`. |
 
 The action scenarios (`eat` to `panels`) act through keys and the mouse;
 Lua only sets up state (items, hunger, fatigue) and finds where to click.

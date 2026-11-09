@@ -34,6 +34,7 @@ pub const ALL: &[Scenario] = &[
     Scenario { name: "eat", about: "Eat from an apple's inventory menu lowers hunger", check: eat },
     Scenario { name: "equip", about: "Equip in Both Hands from a bat's inventory menu puts it in hand", check: equip },
     Scenario { name: "melee", about: "aim and click kill a zombie in front with a bat", check: melee },
+    Scenario { name: "door", about: "E (or the context menu) opens a door", check: door },
 ];
 
 /// What a scenario leaves behind besides pass/fail.
@@ -52,7 +53,9 @@ const KNOWN: &[(&str, &str)] = &[
     ("require_failed", "a Lua module that loads in the original fails to require (the 9 vanilla failures count as warnings)"),
     ("no_such_function", "ItemCodeOnCreate handlers not ported (GasMask, SubjectBook, ...; RandomColor, IDCard and RecipeMagazine are)"),
     ("in createMenu", "ISInventoryPaneContextMenu.createMenu calls about 20 unbound InventoryItem/IsoPlayer methods (getClothingItemExtraOption, ...), so item menus stop half-built"),
+    ("no world context menu", "the world context menu does not open: UIManager does not fire OnObjectRightMouseButtonUp (no IsoObjectPicker)"),
     ("no attack started", "aim + left click starts no attack, and zombies do not move or react"),
+    ("context_actions_nswe", "E does nothing at doors and windows: the world's doContext hook (context_actions_nswe) is not ported"),
     ("at getVehicleToInteractWith:", "IsoPlayer.getUseableVehicle/getNearVehicle are unbound: ISVehicleMenu.onKeyPressed fails on every key press"),
 ];
 
@@ -628,6 +631,8 @@ fn save_load(env: &Env, o: &mut Outcome) -> Result<String, String> {
 const ACTION_SPAWN: &str = "10620,9940,0";
 /// An open parking lot; zombies are placed at random, but some are near.
 const MELEE_SPAWN: &str = "10624,9930,0";
+/// The square south of the north-facing door at 10621,9911.
+const DOOR_SPAWN: &str = "10621,9911,0";
 
 /// A new game at `spawn`, the guide closed and the action Lua loaded.
 fn into_action_world<'a>(env: &'a Env, name: &'a str, spawn: &str, o: &mut Outcome) -> Result<Session<'a>, String> {
@@ -697,6 +702,19 @@ impl Session<'_> {
                  ISInventoryPaneContextMenu.createMenu: {} (the UI swallows errors in mouse handlers, \
                  so the log has none)",
                 e.as_str().unwrap_or("?")
+            ));
+        }
+        Ok(())
+    }
+
+    /// Right-click a window point; an error when no context menu opens.
+    fn world_menu(&mut self, x: f64, y: f64) -> Result<(), String> {
+        self.right_click(x, y)?;
+        self.frames(5)?;
+        if self.menu()?.is_empty() {
+            return Err(format!(
+                "no world context menu after a right click at ({x:.0}, {y:.0}): UIManager does not fire \
+                 OnObjectRightMouseButtonUp (no IsoObjectPicker)"
             ));
         }
         Ok(())
@@ -892,6 +910,73 @@ fn melee(env: &Env, o: &mut Outcome) -> Result<String, String> {
             "no attack started: the zombie at ({zx}, {zy}) still stands after 6 aimed clicks from {d:.2} tiles; \
              action states {states:?}"
         ))
+    })();
+    let v = verdict(&s, o, mark, r);
+    s.c.quit().ok();
+    v
+}
+
+/// Lua: the nearest door within 30 tiles (`IsoObject.getSquare()` is nil
+/// for map objects, so the scan keeps the square); the player faces it.
+const FIND_DOOR: &str = r#"
+local p = getPlayer()
+local px, py, pz = math.floor(p:getX()), math.floor(p:getY()), math.floor(p:getZ())
+local best, bd, bsq
+for dy = -30, 30 do for dx = -30, 30 do
+    local sq = getCell():getGridSquare(px + dx, py + dy, pz)
+    if sq then
+        local objs = sq:getObjects()
+        for i = 0, objs:size() - 1 do
+            local o = objs:get(i)
+            if instanceof(o, 'IsoDoor') then
+                local d = dx * dx + dy * dy
+                if not bd or d < bd then best, bd, bsq = o, d, sq end
+            end
+        end
+    end
+end end
+if not best then return pzctl_json({ error = 'no IsoDoor within 30 tiles of ' .. px .. ',' .. py }) end
+p:setDir(best:getNorth() and IsoDirections.N or IsoDirections.W)
+pzctl_door = best
+return pzctl_json({ x = bsq:getX(), y = bsq:getY(), north = best:getNorth(), open = best:IsOpen() })
+"#;
+
+fn door(env: &Env, o: &mut Outcome) -> Result<String, String> {
+    let mut s = into_action_world(env, "door", DOOR_SPAWN, o)?;
+    let d = s.prepare("finding a door", FIND_DOOR)?;
+    s.frames(10)?;
+    let mark = s.c.mark();
+    let r = (|| -> Result<String, String> {
+        let is_open = |s: &mut Session| s.lua("return tostring(pzctl_door:IsOpen())").map(|v| v == "true");
+        let word = |open: bool| if open { "open" } else { "closed" };
+        let open0 = is_open(&mut s)?;
+        s.key("E", "tap", 1)?;
+        s.frames(30)?;
+        s.shot(o, "after-e")?;
+        if is_open(&mut s)? != open0 {
+            return Ok(format!("E made the door at ({}, {}) {}", d["x"], d["y"], word(!open0)));
+        }
+        let e = format!(
+            "E left the door at ({}, {}) {}: doContext finds no contextual action (the world's \
+             context_actions_nswe is not ported)",
+            d["x"],
+            d["y"],
+            word(open0)
+        );
+        // Fall back to the context menu on the door's edge.
+        let (ex, ey) = if d["north"] == true { (f(&d["x"]) + 0.5, f(&d["y"])) } else { (f(&d["x"]), f(&d["y"]) + 0.5) };
+        let at = s.lua(&format!(
+            "return pzctl_json({{ x = isoToScreenX(0, {ex}, {ey}, 0), y = isoToScreenY(0, {ex}, {ey}, 0) }})"
+        ))?;
+        s.world_menu(f(&at["x"]), f(&at["y"]) - 40.0).map_err(|m| format!("{e}; {m}"))?;
+        s.shot(o, "menu")?;
+        s.choose(if open0 { "Close Door" } else { "Open Door" }).map_err(|m| format!("{e}; {m}"))?;
+        s.frames(60)?;
+        s.shot(o, "after")?;
+        if is_open(&mut s)? == open0 {
+            return Err(format!("{e}; the context menu left it {} too", word(open0)));
+        }
+        Ok(format!("the context menu made the door {} ({e})", word(!open0)))
     })();
     let v = verdict(&s, o, mark, r);
     s.c.quit().ok();
