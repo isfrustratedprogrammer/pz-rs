@@ -117,7 +117,9 @@ the snapshot reads through Lua.
   `[x, y, width, height]`; click the centre of a `rect` to press it.
 - `log` (added by `pz-ctl`): what the game logged since the previous
   snapshot (the first snapshot counts from boot). Kinds: `lua_error` (the
-  line after Kahlua's `-----` separator), `require_failed` (except the
+  line after Kahlua's `-----` separator, or an event handler's `<message>
+  java.lang.RuntimeException` line, sampled with its first `at` line),
+  `require_failed` (except the
   10 failures the original game also logs at boot, which count as
   `warning`; see `VANILLA_REQUIRE_FAILURES` in `crates/pz-ctl/src/logs.rs`),
   `no_such_function`, `error` (other `ERROR:` lines), `null_texture`,
@@ -150,6 +152,18 @@ scenario and a summary; `--out` (default `<cache-dir>/pz-ctl/report`) gets
 | `walk` | Holding W for 60 frames moves the player at least 0.5 tiles. |
 | `ingame-stable` | 600 frames in the world log no Lua errors. |
 | `save-load` | Quit saves the game, and `--load-game` of that save reaches `IngameState` with a player. A failed save still tries the load and reports both. |
+| `eat` | Right-click on an apple's inventory row, Eat (and All) lower hunger from 0.5 within 400 frames. |
+| `equip` | Right-click on a bat's inventory row, Equip in Both Hands puts it in the primary hand. |
+| `melee` | With a bat in hand (set through Lua), the player walks with WASD to the nearest zombie, aims (LCONTROL) and clicks it; it must go down within 6 clicks. |
+| `door` | At the door at 10621,9911, E (or Open Door in the world context menu) changes `IsoDoor.IsOpen()`. |
+| `stances` | C sneaks and stands up again, Shift+W runs, Meta+W sprints. |
+| `sleep` | With fatigue 0.9, Sleep in the world context menu and Yes put the player to sleep. |
+| `panels` | H shows the Health tab, L the Skills tab, B the handcraft window. |
+
+The action scenarios (`eat` to `panels`) act through keys and the mouse;
+Lua only sets up state (items, hunger, fatigue) and finds where to click.
+Each of them also fails on any Lua error logged during the action and
+lists all distinct error samples, so one error does not hide the next.
 
 New games are created as `pzctl-<scenario>` under `<cache-dir>/Saves/Sandbox`;
 each run deletes the previous save of that name first. `--spawn X,Y,Z` puts
@@ -197,3 +211,30 @@ random. (10721, 10630, 0) is a house with about 25 containers.
 - A new game is in `IngameState` after about 1050 frames (about 25 s on an
   M1 Pro with the GPU on). `--no-gpu` is faster but has no screenshots.
 - Headless only: there is no windowed control mode yet.
+- Zombies are placed at random on each new game; doors and other map
+  objects are not. Zombies stand still: they do not walk to or react to a
+  player two tiles away.
+- Window positions, visibility and tabs persist in `<cache-dir>/Lua/layout.ini`
+  across games, as in the original: the character window can be open on
+  a new game. `panels` closes it first.
+- Errors in UI Lua callbacks (`render`, `onRightMouseUp`, ...) are not
+  logged: `pz-ui`'s `pcall_void` / `pcall_bool` drop them. A broken window
+  just stops drawing. Example: the character window's Info tab
+  (`ISCharacterScreen:loadBeardAndHairStyle` needs `IsoPlayer.getHumanVisual`).
+  The scenarios that depend on a callback call it again under `pcall` to
+  get the message. Whether the original logs these is not checked yet.
+
+## What blocks the action scenarios
+
+Found by the action scenarios (2026-11-09). The estimates are for porting
+from the bytecode, with tests.
+
+| Blocker | Effect | Estimate |
+| --- | --- | --- |
+| `ISInventoryPaneContextMenu.createMenu:144` calls unbound methods. InventoryItem: `getClothingItemExtraOption`, `canBeActivated`, `canBeRemote`, `getAnimalTracks`, `getCustomMenuOption`, `getExtraItems`, `getMakeUpType`, `getMediaData`, `getRemoteControlID`, `getScriptItem`, `hasOrigin`, `hasResearchableRecipes`, `haveExtraItems`, `isCanBandage`, `isRemoteController`, `isRequiresEquippedBothHands`, `isTrap`, `isWaterSource`. IsoPlayer: `getHumanVisual`, `isAttachedItem`, `isHandItem`, `isItemInBothHands`, `tooDarkToRead`. | Item context menus stop half-built: no Eat, no Equip (`eat`, `equip`). | 2–4 h |
+| `IsoPlayer.getUseableVehicle` / `getNearVehicle` are unbound (`ISVehicleMenu.getVehicleToInteractWith:245`). They need `BaseVehicle.getUseablePart`, `getBestSeat`, `PolygonalMap2.lineClearCollide` and the chunks' vehicle lists. | One Lua error on every key press (`ISVehicleMenu.onKeyPressed`), so every keyboard scenario fails its no-errors check. | 2–3 h |
+| The world context menu: `UIManager` does not fire `OnObjectRightMouseButtonDown/Up` (`TODO(world)` in `pz-ui/src/manager.rs`); there is no `IsoObjectPicker`. | A right click in the world opens nothing: no Sleep, no Open Door (`sleep`, `door`). | 3–6 h, then more unbound IsoObject methods in `ISWorldObjectContextMenu` |
+| `doContext` (E): the world hooks `context_actions_nswe` / `context_actions_corners` keep their empty defaults in `pz-characters/src/character/state/cx.rs`. | E does nothing at doors, windows and curtains (`door`). | 3–5 h (`getContextDoorOrWindowOrWindowFrame`, the ToggleDoor/ToggleWindow actions) |
+| Melee: aim (LCONTROL) plus a left click leaves the player in `aim`; no attack starts. Not traced yet: the mouse button through `EnginePlayerInput`, or `can_attack`. Zombies do not move. | `melee` cannot hit. | 1–2 h to find the cause; more if it is in the attack states |
+| `IsoObject.getSquare()` is nil for map objects: only world items get the square back-reference (`replace_square`); about 10 places add objects to squares (`cell_loader::add_object`, chunk files, fire, square mutations), and the reference must be released for the component GC. | `ISEntityUI.FindCraftSurface:610` fails, so B opens no handcraft window (`panels`); every Lua `obj:getSquare()` on a map object. | 2–3 h |
+| `IsoGameCharacter.isRecipeActuallyKnown` is unbound, and `InventoryItem.usedInRecipes` is never filled. | `isFavouriteRecipeInput` raises a TODO error for an item used in recipes. | 1–2 h |
