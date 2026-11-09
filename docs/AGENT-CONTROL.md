@@ -157,6 +157,7 @@ scenario and a summary; `--out` (default `<cache-dir>/pz-ctl/report`) gets
 | `door` | At the door at 10621,9911, E (or Open Door in the world context menu) changes `IsoDoor.IsOpen()`. |
 | `stances` | C sneaks and stands up again, Shift+W runs, Meta+W sprints. |
 | `sleep` | With fatigue 0.9, Sleep in the world context menu and Yes put the player to sleep. |
+| `panels` | H shows the Health tab, L the Skills tab, B the handcraft window. |
 
 The action scenarios (`eat` to `panels`) act through keys and the mouse;
 Lua only sets up state (items, hunger, fatigue) and finds where to click.

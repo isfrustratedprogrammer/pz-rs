@@ -37,6 +37,7 @@ pub const ALL: &[Scenario] = &[
     Scenario { name: "door", about: "E (or the context menu) opens a door", check: door },
     Scenario { name: "stances", about: "C sneaks, Shift+W runs, Meta+W sprints", check: stances },
     Scenario { name: "sleep", about: "Sleep from the context menu puts a tired player to sleep", check: sleep },
+    Scenario { name: "panels", about: "H, L and B open the health, skills and crafting windows", check: panels },
 ];
 
 /// What a scenario leaves behind besides pass/fail.
@@ -58,6 +59,7 @@ const KNOWN: &[(&str, &str)] = &[
     ("no world context menu", "the world context menu does not open: UIManager does not fire OnObjectRightMouseButtonUp (no IsoObjectPicker)"),
     ("no attack started", "aim + left click starts no attack, and zombies do not move or react"),
     ("context_actions_nswe", "E does nothing at doors and windows: the world's doContext hook (context_actions_nswe) is not ported"),
+    ("at FindCraftSurface:", "IsoObject.getSquare() is nil for map objects (only world items get the square back-reference), so FindCraftSurface fails"),
     ("at getVehicleToInteractWith:", "IsoPlayer.getUseableVehicle/getNearVehicle are unbound: ISVehicleMenu.onKeyPressed fails on every key press"),
 ];
 
@@ -1050,6 +1052,46 @@ fn sleep(env: &Env, o: &mut Outcome) -> Result<String, String> {
         }
         let (h0, h1) = (f(&before["hours"]), f(&later["hours"]));
         Ok(format!("asleep at speed {}; {:.2} game hours in 600 frames", asleep["speed"], h1 - h0))
+    })();
+    let v = verdict(&s, o, mark, r);
+    s.c.quit().ok();
+    v
+}
+
+/// Keys that open the character windows, Lua that reads what is open,
+/// and the answer each key should give.
+const PANELS: &[(&str, &str, &str)] = &[
+    ("H", INFO_VIEW, "Health"),
+    ("L", INFO_VIEW, "Skills"),
+    ("B", HANDCRAFT_OPEN, "true"),
+];
+/// `ISCharacterInfoWindow`'s active tab when the window is visible.
+const INFO_VIEW: &str = "local w = getPlayerInfoPanel(0) \
+     return tostring(w and w:isVisible() and w.panel.activeView and w.panel.activeView.name)";
+const HANDCRAFT_OPEN: &str = "local h = ISEntityUI.GetWindowInstance(0, 'HandcraftWindow') \
+     return tostring(h ~= nil and h:isVisible())";
+
+fn panels(env: &Env, o: &mut Outcome) -> Result<String, String> {
+    let mut s = into_action_world(env, "panels", ACTION_SPAWN, o)?;
+    let mark = s.c.mark();
+    let r = (|| -> Result<String, String> {
+        let mut ok = Vec::new();
+        let mut bad = Vec::new();
+        for (key, read, want) in PANELS {
+            s.key(key, "tap", 1)?;
+            s.frames(10)?;
+            s.shot(o, &format!("key-{key}"))?;
+            let got = s.lua(read)?;
+            if got == *want {
+                ok.push(format!("{key} -> {want}"));
+            } else {
+                bad.push(format!("{key}: {got} instead of {want}"));
+            }
+        }
+        if !bad.is_empty() {
+            return Err(format!("{} ({} worked)", bad.join("; "), ok.join(", ")));
+        }
+        Ok(ok.join(", "))
     })();
     let v = verdict(&s, o, mark, r);
     s.c.quit().ok();
