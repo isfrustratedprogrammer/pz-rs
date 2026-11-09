@@ -151,6 +151,12 @@ scenario and a summary; `--out` (default `<cache-dir>/pz-ctl/report`) gets
 | `walk` | Holding W for 60 frames moves the player at least 0.5 tiles. |
 | `ingame-stable` | 600 frames in the world log no Lua errors. |
 | `save-load` | Quit saves the game, and `--load-game` of that save reaches `IngameState` with a player. A failed save still tries the load and reports both. |
+| `eat` | Right-click on an apple's inventory row, Eat (and All) lower hunger from 0.5 within 400 frames. |
+
+The action scenarios (`eat` to `panels`) act through keys and the mouse;
+Lua only sets up state (items, hunger, fatigue) and finds where to click.
+Each of them also fails on any Lua error logged during the action and
+lists all distinct error samples, so one error does not hide the next.
 
 New games are created as `pzctl-<scenario>` under `<cache-dir>/Saves/Sandbox`;
 each run deletes the previous save of that name first.

@@ -31,6 +31,7 @@ pub const ALL: &[Scenario] = &[
     Scenario { name: "walk", about: "holding W moves the player", check: walk },
     Scenario { name: "ingame-stable", about: "600 frames in the world log no Lua errors", check: ingame_stable },
     Scenario { name: "save-load", about: "quit saves the game and --load-game enters it again", check: save_load },
+    Scenario { name: "eat", about: "Eat from an apple's inventory menu lowers hunger", check: eat },
 ];
 
 /// What a scenario leaves behind besides pass/fail.
@@ -48,6 +49,8 @@ const KNOWN: &[(&str, &str)] = &[
     ("isAnyVisible of non-table", "getPlayerContextMenu() returns nil: ISPlayerDataObject:createInventoryInterface aborts when an unexplored container is near the spawn, because ItemPicker.fillContainer (ItemPickerJava, the loot distributions) is not ported"),
     ("require_failed", "a Lua module that loads in the original fails to require (the 9 vanilla failures count as warnings)"),
     ("no_such_function", "ItemCodeOnCreate handlers not ported (GasMask, SubjectBook, ...; RandomColor, IDCard and RecipeMagazine are)"),
+    ("in createMenu", "ISInventoryPaneContextMenu.createMenu calls about 20 unbound InventoryItem/IsoPlayer methods (getClothingItemExtraOption, ...), so item menus stop half-built"),
+    ("at getVehicleToInteractWith:", "IsoPlayer.getUseableVehicle/getNearVehicle are unbound: ISVehicleMenu.onKeyPressed fails on every key press"),
 ];
 
 pub fn known_bug(reason: &str) -> Option<&'static str> {
@@ -184,6 +187,20 @@ impl<'a> Session<'a> {
 
     fn click(&mut self, x: f64, y: f64) -> Result<(), String> {
         self.cmd(json!({"cmd": "click", "x": x, "y": y})).map(|_| ())
+    }
+
+    fn right_click(&mut self, x: f64, y: f64) -> Result<(), String> {
+        self.cmd(json!({"cmd": "click", "x": x, "y": y, "button": "right"})).map(|_| ())
+    }
+
+    /// Run a Lua chunk. Returns its first value parsed as JSON when it is
+    /// JSON, else that value as a string.
+    fn lua(&mut self, code: &str) -> Result<Value, String> {
+        let mut r = self.cmd(json!({"cmd": "lua", "code": code}))?;
+        if !r["json"].is_null() {
+            return Ok(r["json"].take());
+        }
+        Ok(r["result"][0].take())
     }
 
     /// Record frames and the log since `mark`, then quit.
@@ -384,6 +401,93 @@ fn resize(env: &Env, o: &mut Outcome) -> Result<String, String> {
     Ok("1600x900, 1024x768, 1280x720 without Lua errors".into())
 }
 
+/// Lua that finds where to click; the action itself is mouse or keyboard
+/// input. Positions are window pixels, like `click`.
+const ACTION_LUA: &str = r#"
+-- Options of the player's visible context menus (the root and its
+-- submenus): name, centre and whether it can be chosen.
+function pzctl_menu()
+    local root = getPlayerContextMenu(0)
+    if not root then return pzctl_json({ error = 'getPlayerContextMenu(0) is nil' }) end
+    local menus, out = { root }, {}
+    for _, m in ipairs(root.instanceMap or {}) do menus[#menus + 1] = m end
+    for _, m in ipairs(menus) do
+        if m:isVisible() and m.options then
+            local dy = (m:getScrollHeight() > m:getScrollAreaHeight()) and m.scrollIndicatorHgt or 0
+            for i = 1, m.numOptions - 1 do
+                local o = m.options[i]
+                if o then
+                    out[#out + 1] = {
+                        name = o.name,
+                        x = m:getAbsoluteX() + math.min(40, m:getWidth() / 2),
+                        y = m:getAbsoluteY() + m.padTopBottom + dy + (i - 0.5) * m.itemHgt + m:getYScroll(),
+                        off = (o.notAvailable or o.isDisabled) and true or false,
+                        sub = o.subOption ~= nil,
+                    }
+                end
+            end
+        end
+    end
+    return pzctl_json(out)
+end
+
+-- The row of the first item of `fullType` in the player's inventory pane.
+function pzctl_inventory_row(fullType)
+    local page = getPlayerInventory(0)
+    if not page then return pzctl_json({ error = 'getPlayerInventory(0) is nil' }) end
+    local pane = page.inventoryPane
+    pane:refreshContainer()
+    -- `pane.items` is rebuilt while the pane renders; `itemslist` holds
+    -- the same rows (one per collapsed group) at once.
+    local row = 0
+    for _, v in ipairs(pane.itemslist) do
+        row = row + 1
+        local i = row
+        local it = v.items and v.items[1]
+        if not pane.collapsed[v.name] and v.items and #v.items > 1 then row = row + #v.items - 1 end
+        if it and it:getFullType() == fullType then
+            return pzctl_json({
+                x = pane:getAbsoluteX() + math.min(pane.column2 or 60, pane.column3 or 60) / 2 + 20,
+                y = pane:getAbsoluteY() + pane.headerHgt + (i - 0.5) * pane.itemHgt + pane:getYScroll(),
+                visible = page:isVisible(), collapsed = page.isCollapsed and true or false,
+                title = page:getAbsoluteY() + 8,
+            })
+        end
+    end
+    return pzctl_json({ error = fullType .. ' is not in the inventory pane (' .. row .. ' rows)' })
+end
+
+-- Why no item menu opened: `ISInventoryPaneContextMenu.createMenu` on the
+-- item, under pcall (errors in UI mouse handlers are not logged).
+function pzctl_item_menu_error(fullType)
+    local it = getPlayer():getInventory():getFirstTypeRecurse(fullType)
+    local ok, e = pcall(function() return ISInventoryPaneContextMenu.createMenu(0, true, { it }, 0, 0) end)
+    if ok then return 'createMenu succeeded' end
+    return tostring(e)
+end
+
+-- What the action scenarios check, each field read on its own.
+function pzctl_state()
+    local p = getPlayer()
+    local r = { errors = {} }
+    local function try(name, f)
+        local ok, v = pcall(f)
+        if ok then r[name] = v else r.errors[#r.errors + 1] = name .. ': ' .. tostring(v) end
+    end
+    try('hunger', function() return p:getStats():get(CharacterStat.HUNGER) end)
+    try('fatigue', function() return p:getStats():get(CharacterStat.FATIGUE) end)
+    try('primary', function() local i = p:getPrimaryHandItem() return i and i:getFullType() or false end)
+    try('sneaking', function() return p:isSneaking() end)
+    try('running', function() return p:isRunning() end)
+    try('sprinting', function() return p:isSprinting() end)
+    try('asleep', function() return p:isAsleep() end)
+    try('speed', function() return getGameSpeed() end)
+    try('hours', function() return getGameTime():getWorldAgeHours() end)
+    try('actions', function() return #ISTimedActionQueue.getTimedActionQueue(p).queue end)
+    return pzctl_json(r)
+end
+"#;
+
 /// A new game up to the first frames of `IngameState`.
 fn into_world<'a>(env: &'a Env, name: &'a str) -> Result<Session<'a>, String> {
     let mut s = Session::new_game(env, name)?;
@@ -508,6 +612,152 @@ fn save_load(env: &Env, o: &mut Outcome) -> Result<String, String> {
         (None, Err(e)) => Err(format!("saved, but loading failed: {e}")),
         (Some(e), Err(l)) => Err(format!("saving on quit failed: {e}; loading then failed: {l}")),
     }
+}
+
+/// Where most action scenarios start: outdoors on a street, with no
+/// container in reach (an unexplored container near the spawn breaks the
+/// inventory UI; see `docs/AGENT-CONTROL.md`).
+const ACTION_SPAWN: &str = "10620,9940,0";
+
+/// A new game at `spawn`, the guide closed and the action Lua loaded.
+fn into_action_world<'a>(env: &'a Env, name: &'a str, spawn: &str, o: &mut Outcome) -> Result<Session<'a>, String> {
+    let world = format!("pzctl-{name}");
+    let _ = std::fs::remove_dir_all(env.opts.cache_dir.join("Saves").join("Sandbox").join(&world));
+    let mut s = Session::start(env, name, &["--new-game".into(), world, "--spawn".into(), spawn.into()])?;
+    s.until_state(INGAME, 3000)?;
+    s.frames(20)?;
+    let _ = close_guide(&mut s, o);
+    s.cmd(json!({"cmd": "lua", "code": ACTION_LUA}))?;
+    // The character window's visibility and tab come from `Lua/layout.ini`
+    // (earlier games). Its Info tab fails to render (no
+    // `IsoPlayer.getHumanVisual`), and the frame then stays black.
+    s.prepare("closing the character window", "getPlayerInfoPanel(0):setVisible(false) return 'ok'")?;
+    Ok(s)
+}
+
+impl Session<'_> {
+    fn state(&mut self) -> Result<Value, String> {
+        self.lua("return pzctl_state()")
+    }
+
+    /// The visible context-menu options; empty when no menu is open.
+    fn menu(&mut self) -> Result<Vec<Value>, String> {
+        let opts = self.lua("return pzctl_menu()")?;
+        if let Some(e) = opts["error"].as_str() {
+            return Err(e.to_string());
+        }
+        Ok(opts.as_array().cloned().unwrap_or_default())
+    }
+
+    /// Click the visible context-menu option `name` (a submenu opens).
+    fn choose(&mut self, name: &str) -> Result<(), String> {
+        let opts = self.menu().map_err(|e| format!("choosing \"{name}\": {e}"))?;
+        let names: Vec<&str> = opts.iter().filter_map(|o| o["name"].as_str()).collect();
+        let o = opts
+            .iter()
+            .find(|o| o["name"] == name)
+            .ok_or_else(|| format!("no \"{name}\" in the context menu; it has {names:?}"))?;
+        if o["off"] == true {
+            return Err(format!("\"{name}\" is disabled in the context menu"));
+        }
+        let (x, y) = (f(&o["x"]), f(&o["y"]));
+        self.click(x, y)?;
+        self.frames(2)
+    }
+
+    /// Right-click the inventory row of the first `full_type` item.
+    fn item_menu(&mut self, full_type: &str) -> Result<(), String> {
+        let code = format!("return pzctl_inventory_row({full_type:?})");
+        let row = self.lua(&code)?;
+        if let Some(e) = row["error"].as_str() {
+            return Err(e.to_string());
+        }
+        let (x, y) = (f(&row["x"]), f(&row["y"]));
+        // The inventory page unfolds while the mouse is over its title.
+        self.cmd(json!({"cmd": "mouse", "x": x, "y": f(&row["title"]), "frames": 10}))?;
+        self.cmd(json!({"cmd": "mouse", "x": x, "y": y, "frames": 5}))?;
+        let row = self.lua(&code)?;
+        let (x, y) = (row["x"].as_f64().unwrap_or(x), row["y"].as_f64().unwrap_or(y));
+        self.right_click(x, y)?;
+        self.frames(2)?;
+        if self.menu()?.is_empty() {
+            let e = self.lua(&format!("return pzctl_item_menu_error({full_type:?})"))?;
+            return Err(format!(
+                "no context menu after a right click on the {full_type} row at ({x:.0}, {y:.0}); \
+                 ISInventoryPaneContextMenu.createMenu: {} (the UI swallows errors in mouse handlers, \
+                 so the log has none)",
+                e.as_str().unwrap_or("?")
+            ));
+        }
+        Ok(())
+    }
+
+    /// Lua that must succeed; its value as JSON or a string.
+    fn prepare(&mut self, what: &str, code: &str) -> Result<Value, String> {
+        let r = self.lua(code)?;
+        if let Some(e) = r["error"].as_str() {
+            return Err(format!("{what}: {e}"));
+        }
+        Ok(r)
+    }
+
+}
+
+/// The check's result, failed by the Lua errors logged since `mark` (all
+/// distinct samples, so one error does not hide the next).
+fn verdict(s: &Session, o: &mut Outcome, mark: usize, r: Result<String, String>) -> Result<String, String> {
+    s.note(o, mark);
+    let log = o.log.as_ref().unwrap_or(&Value::Null);
+    let n = count(log, Kind::LuaError) + count(log, Kind::Error);
+    let errors = (n > 0).then(|| {
+        let samples: Vec<&str> = ["lua_error", "error"]
+            .iter()
+            .flat_map(|k| log["samples"][k].as_array().into_iter().flatten().filter_map(Value::as_str))
+            .collect();
+        format!("{n} Lua errors: {}", samples.join(" | "))
+    });
+    match (r, errors) {
+        (Ok(t), None) => Ok(t),
+        (Ok(t), Some(e)) => Err(format!("{t}, but {e}")),
+        (Err(f), None) => Err(f),
+        (Err(f), Some(e)) => Err(format!("{f}; {e}")),
+    }
+}
+
+fn f(v: &Value) -> f64 {
+    v.as_f64().unwrap_or(f64::NAN)
+}
+
+fn eat(env: &Env, o: &mut Outcome) -> Result<String, String> {
+    let mut s = into_action_world(env, "eat", ACTION_SPAWN, o)?;
+    s.prepare(
+        "giving an apple",
+        "local p = getPlayer() p:getInventory():AddItem('Base.Apple') \
+         p:getStats():set(CharacterStat.HUNGER, 0.5) return 'ok'",
+    )?;
+    let mark = s.c.mark();
+    let r = (|| -> Result<String, String> {
+        let before = s.state()?;
+        s.item_menu("Base.Apple")?;
+        s.shot(o, "menu")?;
+        s.choose("Eat")?;
+        // Food with more than a quarter of hunger opens All / 1/2 / 1/4.
+        if s.menu()?.iter().any(|o| o["name"] == "All") {
+            s.choose("All")?;
+        }
+        s.frames(400)?;
+        let after = s.state()?;
+        let left = s.lua("return getPlayer():getInventory():getCountTypeRecurse('Base.Apple')")?;
+        s.shot(o, "after")?;
+        let (h0, h1) = (f(&before["hunger"]), f(&after["hunger"]));
+        if !(h1 < h0) {
+            return Err(format!("hunger {h0} -> {h1} after choosing Eat; apples left {left}; state {after}"));
+        }
+        Ok(format!("hunger {h0:.3} -> {h1:.3}; apples left {left}"))
+    })();
+    let v = verdict(&s, o, mark, r);
+    s.c.quit().ok();
+    v
 }
 
 fn load_into_world(env: &Env, name: &str, o: &mut Outcome) -> Result<(f64, f64), String> {
