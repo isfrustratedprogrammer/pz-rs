@@ -33,6 +33,7 @@ pub const ALL: &[Scenario] = &[
     Scenario { name: "save-load", about: "quit saves the game and --load-game enters it again", check: save_load },
     Scenario { name: "eat", about: "Eat from an apple's inventory menu lowers hunger", check: eat },
     Scenario { name: "equip", about: "Equip in Both Hands from a bat's inventory menu puts it in hand", check: equip },
+    Scenario { name: "melee", about: "aim and click kill a zombie in front with a bat", check: melee },
 ];
 
 /// What a scenario leaves behind besides pass/fail.
@@ -51,6 +52,7 @@ const KNOWN: &[(&str, &str)] = &[
     ("require_failed", "a Lua module that loads in the original fails to require (the 9 vanilla failures count as warnings)"),
     ("no_such_function", "ItemCodeOnCreate handlers not ported (GasMask, SubjectBook, ...; RandomColor, IDCard and RecipeMagazine are)"),
     ("in createMenu", "ISInventoryPaneContextMenu.createMenu calls about 20 unbound InventoryItem/IsoPlayer methods (getClothingItemExtraOption, ...), so item menus stop half-built"),
+    ("no attack started", "aim + left click starts no attack, and zombies do not move or react"),
     ("at getVehicleToInteractWith:", "IsoPlayer.getUseableVehicle/getNearVehicle are unbound: ISVehicleMenu.onKeyPressed fails on every key press"),
 ];
 
@@ -192,6 +194,11 @@ impl<'a> Session<'a> {
 
     fn right_click(&mut self, x: f64, y: f64) -> Result<(), String> {
         self.cmd(json!({"cmd": "click", "x": x, "y": y, "button": "right"})).map(|_| ())
+    }
+
+    /// `action`: `tap`, `hold`, `down` or `up`.
+    fn key(&mut self, key: &str, action: &str, frames: u32) -> Result<(), String> {
+        self.cmd(json!({"cmd": "key", "key": key, "action": action, "frames": frames})).map(|_| ())
     }
 
     /// Run a Lua chunk. Returns its first value parsed as JSON when it is
@@ -619,6 +626,8 @@ fn save_load(env: &Env, o: &mut Outcome) -> Result<String, String> {
 /// container in reach (an unexplored container near the spawn breaks the
 /// inventory UI; see `docs/AGENT-CONTROL.md`).
 const ACTION_SPAWN: &str = "10620,9940,0";
+/// An open parking lot; zombies are placed at random, but some are near.
+const MELEE_SPAWN: &str = "10624,9930,0";
 
 /// A new game at `spawn`, the guide closed and the action Lua loaded.
 fn into_action_world<'a>(env: &'a Env, name: &'a str, spawn: &str, o: &mut Outcome) -> Result<Session<'a>, String> {
@@ -702,6 +711,49 @@ impl Session<'_> {
         Ok(r)
     }
 
+    /// Walk with the movement keys straight at a world point until within
+    /// `near` tiles. W moves -x -y, D +x -y, S +x +y, A -x +y.
+    fn walk_to(&mut self, tx: f64, ty: f64, near: f64) -> Result<(f64, f64), String> {
+        let mut last: Option<(f64, f64)> = None;
+        let mut stuck = 0;
+        for _ in 0..150 {
+            let (x, y) = position(&self.snapshot()?).ok_or("no player")?;
+            let (dx, dy) = (tx - x, ty - y);
+            if (dx * dx + dy * dy).sqrt() <= near {
+                return Ok((x, y));
+            }
+            let sign = |d: f64| if d.abs() < 0.25 { 0 } else if d > 0.0 { 1 } else { -1 };
+            let keys: &[&str] = match (sign(dx), sign(dy)) {
+                (1, -1) => &["D"],
+                (1, 1) => &["S"],
+                (-1, 1) => &["A"],
+                (-1, -1) => &["W"],
+                (1, 0) => &["S", "D"],
+                (-1, 0) => &["W", "A"],
+                (0, 1) => &["S", "A"],
+                (0, -1) => &["W", "D"],
+                _ => return Ok((x, y)),
+            };
+            for k in keys {
+                self.key(k, "down", 1)?;
+            }
+            self.frames(10)?;
+            for k in keys {
+                self.key(k, "up", 1)?;
+            }
+            match last {
+                Some((lx, ly)) if ((x - lx).powi(2) + (y - ly).powi(2)).sqrt() < 0.05 => {
+                    stuck += 1;
+                    if stuck >= 4 {
+                        return Err(format!("stuck at ({x:.2}, {y:.2})"));
+                    }
+                }
+                _ => stuck = 0,
+            }
+            last = Some((x, y));
+        }
+        Err("still walking after 150 steps".into())
+    }
 }
 
 /// The check's result, failed by the Lua errors logged since `mark` (all
@@ -776,6 +828,70 @@ fn equip(env: &Env, o: &mut Outcome) -> Result<String, String> {
             return Err(format!("primary hand holds {} after Equip in Both Hands; state {st}", st["primary"]));
         }
         Ok("Equip in Both Hands put the bat in the primary hand".into())
+    })();
+    let v = verdict(&s, o, mark, r);
+    s.c.quit().ok();
+    v
+}
+
+fn melee(env: &Env, o: &mut Outcome) -> Result<String, String> {
+    let mut s = into_action_world(env, "melee", MELEE_SPAWN, o)?;
+    s.prepare(
+        "equipping a bat",
+        "local p = getPlayer() local bat = p:getInventory():AddItem('Base.BaseballBat') \
+         p:setPrimaryHandItem(bat) p:setSecondaryHandItem(bat) return 'ok'",
+    )?;
+    let mark = s.c.mark();
+    let r = (|| -> Result<String, String> {
+        let snap = s.snapshot()?;
+        let z = snap["zombies"]["nearby"][0].clone();
+        if z.is_null() {
+            return Err("no zombie within 30 tiles".into());
+        }
+        let (zx, zy) = (f(&z["x"]), f(&z["y"]));
+        let total = snap["zombies"]["total"].as_u64().unwrap_or(0);
+        let (px, py) = s
+            .walk_to(zx, zy, 1.1)
+            .map_err(|e| format!("walking to the nearest zombie at ({zx}, {zy}): {e}"))?;
+        let at = s.prepare(
+            "facing the zombie",
+            &format!(
+                "getPlayer():faceLocation({zx}, {zy}) \
+                 return pzctl_json({{ x = isoToScreenX(0, {zx}, {zy}, 0), y = isoToScreenY(0, {zx}, {zy}, 0) }})"
+            ),
+        )?;
+        // Click the zombie's body, above its feet.
+        let (cx, cy) = (f(&at["x"]), f(&at["y"]) - 40.0);
+        s.shot(o, "zombie")?;
+        let mut states = Vec::new();
+        for swing in 1..=6 {
+            s.key("LCONTROL", "down", 1)?;
+            s.frames(5)?;
+            s.cmd(json!({"cmd": "click", "x": cx, "y": cy, "frames": 2}))?;
+            s.frames(10)?;
+            let snap = s.snapshot()?;
+            states.push(snap["player"]["action_state"].as_str().unwrap_or("?").to_string());
+            s.frames(30)?;
+            s.key("LCONTROL", "up", 1)?;
+            let snap = s.snapshot()?;
+            let standing = snap["zombies"]["nearby"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|z| (f(&z["x"]) - zx).abs() < 0.3 && (f(&z["y"]) - zy).abs() < 0.3));
+            let after = snap["zombies"]["total"].as_u64().unwrap_or(0);
+            if !standing || after < total {
+                s.shot(o, "after")?;
+                return Ok(format!(
+                    "the zombie at ({zx}, {zy}) went down after {swing} aimed clicks (zombies {total} -> {after}, \
+                     still at its spot: {standing}); action states {states:?}"
+                ));
+            }
+        }
+        s.shot(o, "after")?;
+        let d = ((zx - px).powi(2) + (zy - py).powi(2)).sqrt();
+        Err(format!(
+            "no attack started: the zombie at ({zx}, {zy}) still stands after 6 aimed clicks from {d:.2} tiles; \
+             action states {states:?}"
+        ))
     })();
     let v = verdict(&s, o, mark, r);
     s.c.quit().ok();

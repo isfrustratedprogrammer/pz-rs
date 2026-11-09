@@ -153,6 +153,7 @@ scenario and a summary; `--out` (default `<cache-dir>/pz-ctl/report`) gets
 | `save-load` | Quit saves the game, and `--load-game` of that save reaches `IngameState` with a player. A failed save still tries the load and reports both. |
 | `eat` | Right-click on an apple's inventory row, Eat (and All) lower hunger from 0.5 within 400 frames. |
 | `equip` | Right-click on a bat's inventory row, Equip in Both Hands puts it in the primary hand. |
+| `melee` | With a bat in hand (set through Lua), the player walks with WASD to the nearest zombie, aims (LCONTROL) and clicks it; it must go down within 6 clicks. |
 
 The action scenarios (`eat` to `panels`) act through keys and the mouse;
 Lua only sets up state (items, hunger, fatigue) and finds where to click.
