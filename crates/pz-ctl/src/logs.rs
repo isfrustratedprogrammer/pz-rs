@@ -6,7 +6,8 @@ use std::collections::{BTreeMap, VecDeque};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
-    /// A Kahlua runtime error (the line after the `-----` separator).
+    /// A Kahlua runtime error: the line after the `-----` separator, or an
+    /// event handler's `<message> java.lang.RuntimeException` line.
     LuaError,
     /// `require("X") failed`, except [`VANILLA_REQUIRE_FAILURES`].
     RequireFailed,
@@ -73,6 +74,15 @@ fn required_module(line: &str) -> Option<&str> {
     Some(module)
 }
 
+const RUNTIME_EXCEPTION: &str = " java.lang.RuntimeException";
+
+/// An error thrown in an event handler (`Events.OnKeyPressed` and the
+/// like): `<message> java.lang.RuntimeException`, then `at <function>:<line>`
+/// lines, without the `-----` separator.
+fn is_event_error(line: &str) -> bool {
+    line.trim_end().ends_with(RUNTIME_EXCEPTION) && !line.starts_with("ERROR:") && !line.starts_with("WARN")
+}
+
 /// Sorts lines one at a time; Lua errors need the previous line.
 #[derive(Default)]
 pub struct Classifier {
@@ -88,7 +98,7 @@ impl Classifier {
         if after {
             return Some(Kind::LuaError);
         }
-        if line.starts_with("LUAERR") {
+        if line.starts_with("LUAERR") || is_event_error(line) {
             return Some(Kind::LuaError);
         }
         if let Some(module) = required_module(line.trim_end()) {
@@ -123,6 +133,9 @@ pub struct LogBook {
     pub entries: Vec<(Kind, String)>,
     pub lines: usize,
     tail: VecDeque<String>,
+    /// The last entry is an event error still waiting for its first
+    /// `at <function>:<line>`.
+    wants_at: bool,
 }
 
 const TAIL: usize = 40;
@@ -131,8 +144,17 @@ const SAMPLES: usize = 10;
 impl LogBook {
     pub fn push(&mut self, line: &str) {
         self.lines += 1;
+        let wants_at = std::mem::take(&mut self.wants_at);
         if let Some(k) = self.classifier.classify(line) {
             self.entries.push((k, line.trim_end().to_string()));
+            self.wants_at = k == Kind::LuaError && is_event_error(line);
+        } else if wants_at && line.starts_with("at ") {
+            // The function and line make the sample useful.
+            if let Some((_, l)) = self.entries.last_mut() {
+                l.truncate(l.len() - RUNTIME_EXCEPTION.len());
+                l.push_str(", ");
+                l.push_str(line.trim_end());
+            }
         }
         if self.tail.len() == TAIL {
             self.tail.pop_front();
@@ -206,6 +228,22 @@ mod tests {
         assert_eq!(c.classify(SEPARATOR), None);
         assert_eq!(c.classify("attempted index: isAnyVisible of non-table: null"), Some(Kind::LuaError));
         assert_eq!(c.classify("Could not find video"), None);
+    }
+
+    #[test]
+    fn event_handler_errors_are_lua_errors_with_their_function() {
+        let mut b = LogBook::default();
+        b.push("Object tried to call nil in displayCharacterInfo java.lang.RuntimeException");
+        b.push("at displayCharacterInfo:128");
+        b.push("at onKeyPressed:1650");
+        b.push("ERROR: General f:0> x java.lang.RuntimeException");
+        let s = b.summary(0, b.entries.len());
+        assert_eq!(count(&s, Kind::LuaError), 1);
+        assert_eq!(count(&s, Kind::Error), 1);
+        assert_eq!(
+            s["samples"]["lua_error"][0],
+            "Object tried to call nil in displayCharacterInfo, at displayCharacterInfo:128"
+        );
     }
 
     #[test]

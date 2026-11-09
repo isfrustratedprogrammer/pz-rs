@@ -117,7 +117,9 @@ the snapshot reads through Lua.
   `[x, y, width, height]`; click the centre of a `rect` to press it.
 - `log` (added by `pz-ctl`): what the game logged since the previous
   snapshot (the first snapshot counts from boot). Kinds: `lua_error` (the
-  line after Kahlua's `-----` separator), `require_failed` (except the
+  line after Kahlua's `-----` separator, or an event handler's `<message>
+  java.lang.RuntimeException` line, sampled with its first `at` line),
+  `require_failed` (except the
   10 failures the original game also logs at boot, which count as
   `warning`; see `VANILLA_REQUIRE_FAILURES` in `crates/pz-ctl/src/logs.rs`),
   `no_such_function`, `error` (other `ERROR:` lines), `null_texture`,
