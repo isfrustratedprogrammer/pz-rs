@@ -32,6 +32,7 @@ pub const ALL: &[Scenario] = &[
     Scenario { name: "ingame-stable", about: "600 frames in the world log no Lua errors", check: ingame_stable },
     Scenario { name: "save-load", about: "quit saves the game and --load-game enters it again", check: save_load },
     Scenario { name: "eat", about: "Eat from an apple's inventory menu lowers hunger", check: eat },
+    Scenario { name: "equip", about: "Equip in Both Hands from a bat's inventory menu puts it in hand", check: equip },
 ];
 
 /// What a scenario leaves behind besides pass/fail.
@@ -754,6 +755,27 @@ fn eat(env: &Env, o: &mut Outcome) -> Result<String, String> {
             return Err(format!("hunger {h0} -> {h1} after choosing Eat; apples left {left}; state {after}"));
         }
         Ok(format!("hunger {h0:.3} -> {h1:.3}; apples left {left}"))
+    })();
+    let v = verdict(&s, o, mark, r);
+    s.c.quit().ok();
+    v
+}
+
+fn equip(env: &Env, o: &mut Outcome) -> Result<String, String> {
+    let mut s = into_action_world(env, "equip", ACTION_SPAWN, o)?;
+    s.prepare("giving a bat", "getPlayer():getInventory():AddItem('Base.BaseballBat') return 'ok'")?;
+    let mark = s.c.mark();
+    let r = (|| -> Result<String, String> {
+        s.item_menu("Base.BaseballBat")?;
+        s.shot(o, "menu")?;
+        s.choose("Equip in Both Hands")?;
+        s.frames(150)?;
+        let st = s.state()?;
+        s.shot(o, "after")?;
+        if st["primary"] != "Base.BaseballBat" {
+            return Err(format!("primary hand holds {} after Equip in Both Hands; state {st}", st["primary"]));
+        }
+        Ok("Equip in Both Hands put the bat in the primary hand".into())
     })();
     let v = verdict(&s, o, mark, r);
     s.c.quit().ok();
