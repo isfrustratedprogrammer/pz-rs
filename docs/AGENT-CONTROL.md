@@ -161,11 +161,16 @@ each run deletes the previous save of that name first.
   on quit is intermittent: with the same spawn point and frame count it
   sometimes saves and sometimes fails. `save-load` therefore passes on some
   runs and fails on others.
-- In the world the log fills with `attempted index: isAnyVisible of
+- In the world the log can fill with `attempted index: isAnyVisible of
   non-table: null` (126 in 600 frames with the cursor left at (0, 0)): the
   hotbar, equipment and inventory UI call `getPlayerContextMenu()`, which
-  returns nil, likely because `ISUI/ISContextMenu` and
-  `ISUI/PlayerData/ISPlayerData` fail to `require`.
+  is nil when `ISPlayerDataObject:createInventoryInterface` aborts. It
+  aborts only when an object with containers is near the spawn, because
+  `IsoObject.getContainerByIndex` is not ported: world-object containers
+  are not shared with Lua. Spawns without containers nearby are clean.
+- `ItemCodeOnCreate.*` `no_such_function` lines are expected: most item
+  OnCreate handlers are not ported yet (RecipeMagazine, RandomColor and
+  IDCard are).
 - The main menu ignores clicks until `MainScreen.instance.delay` (wall-clock
   milliseconds) is used up; `menu-solo` polls it through `lua`.
 - A new game is in `IngameState` after about 1050 frames (about 25 s on an
