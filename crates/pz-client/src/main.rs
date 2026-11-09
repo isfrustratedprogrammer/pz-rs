@@ -14,7 +14,12 @@
 //! a point of the map's `spawnpoints.lua`) and `--seed` shape a new game.
 //! With `--headless-frames N` (and optionally `--png`) the frames run
 //! without a window.
+//!
+//! `--control` boots without a window and takes JSON commands on stdin
+//! (`docs/AGENT-CONTROL.md`); `pz-ctl` drives it. `--no-gpu` skips the
+//! offscreen renderer (no screenshots).
 
+mod control;
 mod install;
 mod main_screen;
 
@@ -32,8 +37,12 @@ fn main() {
     let mut map = "Muldraugh, KY".to_string();
     let mut spawn = None;
     let mut seed = String::new();
+    let mut control = false;
+    let mut gpu = true;
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--control" => control = true,
+            "--no-gpu" => gpu = false,
             "--new-game" => new_game = args.next(),
             "--load-game" => load_game = args.next(),
             "--game-mode" => game_mode = args.next().unwrap_or(game_mode),
@@ -53,7 +62,7 @@ fn main() {
             "--headless-frames" => headless_frames = args.next().and_then(|n| n.parse::<u32>().ok()),
             "--help" | "-h" => {
                 println!(
-                    "pz-client [--game-dir DIR] [--cache-dir DIR] [--headless-frames N] [--png OUT] \
+                    "pz-client [--game-dir DIR] [--cache-dir DIR] [--headless-frames N] [--png OUT] [--control [--no-gpu]] \
                      [--new-game NAME [--game-mode MODE] [--map MAP] [--spawn X,Y,Z] [--seed S] | --load-game MODE/NAME]"
                 );
                 return;
@@ -100,6 +109,9 @@ fn main() {
         }
         (None, None) => Start::MainMenu,
     };
+    if control {
+        std::process::exit(control::run(Launch { game_dir: dir, cache_dir, start }, gpu));
+    }
     let in_game = matches!(start, Start::Game(_));
     if let (Some(out), Some(frames)) = (png_out.clone(), headless_frames) {
         let cache = cache_dir.clone();

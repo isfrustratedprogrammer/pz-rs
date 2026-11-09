@@ -762,6 +762,8 @@ fn headless(launch: Launch, frames: u32, gpu: bool) -> crate::failure::EngineRes
     Ok((w as u32, h as u32, px))
 }
 
+pub mod control;
+
 #[cfg(test)]
 mod retirement_tests;
 #[cfg(test)]

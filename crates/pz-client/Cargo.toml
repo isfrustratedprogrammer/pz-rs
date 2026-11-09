@@ -14,3 +14,4 @@ pz-inventory.workspace = true
 pz-ui.workspace = true
 pz-engine.workspace = true
 png = "0.17"
+serde_json = "1"

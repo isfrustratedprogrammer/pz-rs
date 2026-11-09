@@ -1922,6 +1922,7 @@ dependencies = [
  "pz-lua-api",
  "pz-scripts",
  "pz-ui",
+ "serde_json",
 ]
 
 [[package]]
@@ -1939,6 +1940,14 @@ dependencies = [
  "jiff",
  "png",
  "pz-kahlua",
+]
+
+[[package]]
+name = "pz-ctl"
+version = "0.1.0"
+dependencies = [
+ "png",
+ "serde_json",
 ]
 
 [[package]]
