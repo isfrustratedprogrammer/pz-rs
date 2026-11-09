@@ -117,7 +117,9 @@ the snapshot reads through Lua.
   `[x, y, width, height]`; click the centre of a `rect` to press it.
 - `log` (added by `pz-ctl`): what the game logged since the previous
   snapshot (the first snapshot counts from boot). Kinds: `lua_error` (the
-  line after Kahlua's `-----` separator), `require_failed`,
+  line after Kahlua's `-----` separator), `require_failed` (except the
+  10 failures the original game also logs at boot, which count as
+  `warning`; see `VANILLA_REQUIRE_FAILURES` in `crates/pz-ctl/src/logs.rs`),
   `no_such_function`, `error` (other `ERROR:` lines), `null_texture`,
   `warning`, `panic`. Up to 10 distinct samples per kind, none for
   `null_texture` and `warning`.
@@ -139,7 +141,7 @@ scenario and a summary; `--out` (default `<cache-dir>/pz-ctl/report`) gets
 | Scenario | Passes when |
 | --- | --- |
 | `menu` | After 60 frames the state is `MainScreenState`, the UI lists SOLO, LOAD, OPTIONS and QUIT, and the screenshot is not blank. |
-| `boot-clean` | Boot and 60 menu frames log no failed `require`, Lua error, missing function, `ERROR:` line or panic. |
+| `boot-clean` | Boot and 60 menu frames log no failed `require` (other than those the original also logs), Lua error, missing function, `ERROR:` line or panic. |
 | `menu-solo` | After the menu's intro delay, a click on SOLO adds new UI (the new-game screen) without Lua errors. |
 | `resize` | Resizing to 1600x900, 1024x768 and 1280x720 updates the screen size and logs no Lua errors. |
 | `new-game` | `--new-game` reaches `IngameState` within 3000 frames with a living player. |

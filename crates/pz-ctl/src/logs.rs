@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, VecDeque};
 pub enum Kind {
     /// A Kahlua runtime error (the line after the `-----` separator).
     LuaError,
-    /// `require("X") failed`.
+    /// `require("X") failed`, except [`VANILLA_REQUIRE_FAILURES`].
     RequireFailed,
     /// `no such function "X.y"` (OnCreate and similar callbacks).
     NoSuchFunction,
@@ -16,7 +16,7 @@ pub enum Kind {
     Error,
     /// `X is a null texture.`
     NullTexture,
-    /// `WARN :` lines.
+    /// `WARN :` lines, and the require failures the original also logs.
     Warning,
     /// A Rust panic.
     Panic,
@@ -48,6 +48,31 @@ impl Kind {
 
 const SEPARATOR: &str = "-------------------------------------------------------------";
 
+/// Modules that the original game also fails to require at boot. It logs
+/// them with `DebugType.Lua.warn`. `LuaManager.require` searches only the
+/// `paths` that `LoadDirBase` has added so far, and `LoadDirBase()` loads
+/// `shared` before it adds `client`. So shared files that require client
+/// modules fail, and so does a client file that requires a server module.
+/// The last two paths do not exist in the game.
+pub const VANILLA_REQUIRE_FAILURES: &[&str] = &[
+    "ISUI/ISInventoryPaneContextMenu",
+    "ISUI/ISVehicleMenu",
+    "ISUI/ISContextMenu",
+    "Camping/CCampfireSystem",
+    "TimedActions/ISInventoryTransferAction",
+    "ISUI/PlayerData/ISPlayerData",
+    "BuildingObjects/ISAnimalPickMateCursor",
+    "ISUI/InventoryWindow/ISLootWindowControlHandler",
+    "pzapi/ui/ui",
+];
+
+/// The module of a `require("X") failed` line.
+fn required_module(line: &str) -> Option<&str> {
+    let rest = &line[line.find("require(\"")? + "require(\"".len()..];
+    let module = rest.strip_suffix("\") failed")?;
+    Some(module)
+}
+
 /// Sorts lines one at a time; Lua errors need the previous line.
 #[derive(Default)]
 pub struct Classifier {
@@ -66,7 +91,10 @@ impl Classifier {
         if line.starts_with("LUAERR") {
             return Some(Kind::LuaError);
         }
-        if line.contains("require(\"") && line.trim_end().ends_with("\") failed") {
+        if let Some(module) = required_module(line.trim_end()) {
+            if VANILLA_REQUIRE_FAILURES.contains(&module) {
+                return Some(Kind::Warning);
+            }
             return Some(Kind::RequireFailed);
         }
         if line.contains("no such function \"") {
@@ -155,7 +183,12 @@ mod tests {
     #[test]
     fn classifies_known_lines() {
         let mut c = Classifier::default();
-        assert_eq!(c.classify("require(\"ISUI/ISContextMenu\") failed"), Some(Kind::RequireFailed));
+        assert_eq!(c.classify("require(\"ISUI/ISContextMenu\") failed"), Some(Kind::Warning));
+        assert_eq!(c.classify("require(\"ISUI/ISInventoryPage\") failed"), Some(Kind::RequireFailed));
+        assert_eq!(
+            c.classify("WARN : Lua f:0 at Lua(Vanilla).ISInventoryTransferUtil.lua> require(\"TimedActions/ISInventoryTransferAction\") failed"),
+            Some(Kind::Warning)
+        );
         assert_eq!(
             c.classify("ERROR: General      f:0 at (UnknownStack)    > no such function \"ItemCodeOnCreate.onCreateIDCard\""),
             Some(Kind::NoSuchFunction)
