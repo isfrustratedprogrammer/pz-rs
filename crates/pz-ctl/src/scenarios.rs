@@ -36,6 +36,7 @@ pub const ALL: &[Scenario] = &[
     Scenario { name: "melee", about: "aim and click kill a zombie in front with a bat", check: melee },
     Scenario { name: "door", about: "E (or the context menu) opens a door", check: door },
     Scenario { name: "stances", about: "C sneaks, Shift+W runs, Meta+W sprints", check: stances },
+    Scenario { name: "sleep", about: "Sleep from the context menu puts a tired player to sleep", check: sleep },
 ];
 
 /// What a scenario leaves behind besides pass/fail.
@@ -1017,6 +1018,38 @@ fn stances(env: &Env, o: &mut Outcome) -> Result<String, String> {
             return Err(bad.join("; "));
         }
         Ok("C sneaks and stands up, Shift+W runs, Meta+W sprints".into())
+    })();
+    let v = verdict(&s, o, mark, r);
+    s.c.quit().ok();
+    v
+}
+
+fn sleep(env: &Env, o: &mut Outcome) -> Result<String, String> {
+    let mut s = into_action_world(env, "sleep", ACTION_SPAWN, o)?;
+    s.prepare("tiring the player", "getPlayer():getStats():set(CharacterStat.FATIGUE, 0.9) return 'ok'")?;
+    let mark = s.c.mark();
+    let r = (|| -> Result<String, String> {
+        let before = s.state()?;
+        let scr = s.snapshot()?["screen"].clone();
+        s.world_menu(f(&scr["w"]) / 2.0, f(&scr["h"]) / 2.0)?;
+        s.shot(o, "menu")?;
+        s.choose("Sleep")?;
+        s.frames(5)?;
+        // The confirm dialog (ISModalDialog) has a YES button.
+        let snap = s.snapshot()?;
+        let yes = find_ui(&snap["ui"], &|n| n["text"] == "Yes" || n["text"] == "YES").ok_or("no Yes button after Sleep")?;
+        let (x, y) = center(yes).ok_or("Yes has no rect")?;
+        s.click(x, y)?;
+        s.frames(60)?;
+        let asleep = s.state()?;
+        s.shot(o, "asleep")?;
+        s.frames(600)?;
+        let later = s.state()?;
+        if asleep["asleep"] != true {
+            return Err(format!("not asleep after confirming Sleep; state {asleep}"));
+        }
+        let (h0, h1) = (f(&before["hours"]), f(&later["hours"]));
+        Ok(format!("asleep at speed {}; {:.2} game hours in 600 frames", asleep["speed"], h1 - h0))
     })();
     let v = verdict(&s, o, mark, r);
     s.c.quit().ok();
