@@ -191,3 +191,30 @@ each run deletes the previous save of that name first.
 - A new game is in `IngameState` after about 1050 frames (about 25 s on an
   M1 Pro with the GPU on). `--no-gpu` is faster but has no screenshots.
 - Headless only: there is no windowed control mode yet.
+- Zombies are placed at random on each new game; doors and other map
+  objects are not. Zombies stand still: they do not walk to or react to a
+  player two tiles away.
+- Window positions, visibility and tabs persist in `<cache-dir>/Lua/layout.ini`
+  across games, as in the original: the character window can be open on
+  a new game. `panels` closes it first.
+- Errors in UI Lua callbacks (`render`, `onRightMouseUp`, ...) are not
+  logged: `pz-ui`'s `pcall_void` / `pcall_bool` drop them. A broken window
+  just stops drawing. Example: the character window's Info tab
+  (`ISCharacterScreen:loadBeardAndHairStyle` needs `IsoPlayer.getHumanVisual`).
+  The scenarios that depend on a callback call it again under `pcall` to
+  get the message. Whether the original logs these is not checked yet.
+
+## What blocks the action scenarios
+
+Found by the action scenarios (2026-11-09). The estimates are for porting
+from the bytecode, with tests.
+
+| Blocker | Effect | Estimate |
+| --- | --- | --- |
+| `ISInventoryPaneContextMenu.createMenu:144` calls unbound methods. InventoryItem: `getClothingItemExtraOption`, `canBeActivated`, `canBeRemote`, `getAnimalTracks`, `getCustomMenuOption`, `getExtraItems`, `getMakeUpType`, `getMediaData`, `getRemoteControlID`, `getScriptItem`, `hasOrigin`, `hasResearchableRecipes`, `haveExtraItems`, `isCanBandage`, `isRemoteController`, `isRequiresEquippedBothHands`, `isTrap`, `isWaterSource`. IsoPlayer: `getHumanVisual`, `isAttachedItem`, `isHandItem`, `isItemInBothHands`, `tooDarkToRead`. | Item context menus stop half-built: no Eat, no Equip (`eat`, `equip`). | 2–4 h |
+| `IsoPlayer.getUseableVehicle` / `getNearVehicle` are unbound (`ISVehicleMenu.getVehicleToInteractWith:245`). They need `BaseVehicle.getUseablePart`, `getBestSeat`, `PolygonalMap2.lineClearCollide` and the chunks' vehicle lists. | One Lua error on every key press (`ISVehicleMenu.onKeyPressed`), so every keyboard scenario fails its no-errors check. | 2–3 h |
+| The world context menu: `UIManager` does not fire `OnObjectRightMouseButtonDown/Up` (`TODO(world)` in `pz-ui/src/manager.rs`); there is no `IsoObjectPicker`. | A right click in the world opens nothing: no Sleep, no Open Door (`sleep`, `door`). | 3–6 h, then more unbound IsoObject methods in `ISWorldObjectContextMenu` |
+| `doContext` (E): the world hooks `context_actions_nswe` / `context_actions_corners` keep their empty defaults in `pz-characters/src/character/state/cx.rs`. | E does nothing at doors, windows and curtains (`door`). | 3–5 h (`getContextDoorOrWindowOrWindowFrame`, the ToggleDoor/ToggleWindow actions) |
+| Melee: aim (LCONTROL) plus a left click leaves the player in `aim`; no attack starts. Not traced yet: the mouse button through `EnginePlayerInput`, or `can_attack`. Zombies do not move. | `melee` cannot hit. | 1–2 h to find the cause; more if it is in the attack states |
+| `IsoObject.getSquare()` is nil for map objects: only world items get the square back-reference (`replace_square`); about 10 places add objects to squares (`cell_loader::add_object`, chunk files, fire, square mutations), and the reference must be released for the component GC. | `ISEntityUI.FindCraftSurface:610` fails, so B opens no handcraft window (`panels`); every Lua `obj:getSquare()` on a map object. | 2–3 h |
+| `IsoGameCharacter.isRecipeActuallyKnown` is unbound, and `InventoryItem.usedInRecipes` is never filled. | `isFavouriteRecipeInput` raises a TODO error for an item used in recipes. | 1–2 h |
