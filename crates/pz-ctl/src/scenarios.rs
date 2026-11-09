@@ -35,6 +35,7 @@ pub const ALL: &[Scenario] = &[
     Scenario { name: "equip", about: "Equip in Both Hands from a bat's inventory menu puts it in hand", check: equip },
     Scenario { name: "melee", about: "aim and click kill a zombie in front with a bat", check: melee },
     Scenario { name: "door", about: "E (or the context menu) opens a door", check: door },
+    Scenario { name: "stances", about: "C sneaks, Shift+W runs, Meta+W sprints", check: stances },
 ];
 
 /// What a scenario leaves behind besides pass/fail.
@@ -977,6 +978,45 @@ fn door(env: &Env, o: &mut Outcome) -> Result<String, String> {
             return Err(format!("{e}; the context menu left it {} too", word(open0)));
         }
         Ok(format!("the context menu made the door {} ({e})", word(!open0)))
+    })();
+    let v = verdict(&s, o, mark, r);
+    s.c.quit().ok();
+    v
+}
+
+fn stances(env: &Env, o: &mut Outcome) -> Result<String, String> {
+    let mut s = into_action_world(env, "stances", ACTION_SPAWN, o)?;
+    let mark = s.c.mark();
+    let r = (|| -> Result<String, String> {
+        let mut bad = Vec::new();
+        s.key("C", "tap", 1)?;
+        s.frames(10)?;
+        let st = s.state()?;
+        if st["sneaking"] != true {
+            bad.push(format!("C: sneaking {}", st["sneaking"]));
+        }
+        s.key("C", "tap", 1)?;
+        s.frames(10)?;
+        if s.state()?["sneaking"] != false {
+            bad.push("second C: still sneaking".into());
+        }
+        for (mod_key, field) in [("LSHIFT", "running"), ("LMETA", "sprinting")] {
+            s.key(mod_key, "down", 1)?;
+            s.key("W", "down", 1)?;
+            s.frames(20)?;
+            let st = s.state()?;
+            s.key("W", "up", 1)?;
+            s.key(mod_key, "up", 1)?;
+            s.frames(10)?;
+            if st[field] != true {
+                bad.push(format!("{mod_key}+W: {field} {}", st[field]));
+            }
+        }
+        s.shot(o, "after")?;
+        if !bad.is_empty() {
+            return Err(bad.join("; "));
+        }
+        Ok("C sneaks and stands up, Shift+W runs, Meta+W sprints".into())
     })();
     let v = verdict(&s, o, mark, r);
     s.c.quit().ok();
