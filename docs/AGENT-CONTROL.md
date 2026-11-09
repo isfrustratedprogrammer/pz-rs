@@ -160,10 +160,6 @@ random. (10721, 10630, 0) is a house with about 25 containers.
 
 - New games spawn at a random point of the map, so two runs differ. Pass
   `--spawn X,Y,Z` (and `--seed`) after `start` for a fixed one.
-- The `PlayerDB save host failure: ... bounded scratch component writer`
-  on quit is intermittent: with the same spawn point and frame count it
-  sometimes saves and sometimes fails. `save-load` therefore passes on some
-  runs and fails on others.
 - `attempted index: isAnyVisible of non-table: null` in the world log means
   `ISPlayerDataObject:createInventoryInterface` aborted, so
   `getPlayerContextMenu()` is nil for the hotbar, equipment and inventory UI.
