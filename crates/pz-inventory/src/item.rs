@@ -488,6 +488,12 @@ pub struct InventoryItem {
     /// Base InventoryItem.itemHeat, initially 1 and preserved by item load.
     /// Distinct from both Food.heat and DrainableComboItem.heat.
     pub item_heat: f32,
+    /// `InventoryItem.jobDelta`: the progress bar of a timed action on
+    /// the item, set from Lua; 0 initially, never saved or copied.
+    pub job_delta: f32,
+    /// `InventoryItem.jobType`: the action name drawn on that bar; null
+    /// initially, never saved or copied.
+    pub job_type: Option<String>,
     /// Actual DrainableComboItem.heat; absent for every other native class.
     /// Constructors initialize 1; inherited item save/load omit this field.
     pub drainable_heat: Option<f32>,
@@ -647,6 +653,8 @@ impl InventoryItem {
             // `item.setWetCooldown(this.wetCooldown)`.
             wet_cooldown: t.wet_cooldown,
             item_heat: 1.0,
+            job_delta: 0.0,
+            job_type: None,
             drainable_heat: (t.class == ItemClass::Drainable).then_some(1.0),
             favorite: false,
             stash_map: None,

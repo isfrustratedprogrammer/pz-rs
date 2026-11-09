@@ -187,12 +187,12 @@ random. (10721, 10630, 0) is a house with about 25 containers.
   - vehicle distributions (`fillVehicle*`): 1–2 days;
   - `RoomDef.proceduralSpawnedContainer` lives in memory only and is not
     saved: about half a day with the map save.
-- The inventory and loot windows open, but their item lists draw no rows:
-  `ISInventoryPane:renderdetails` calls `InventoryItem` methods that are not
-  exposed (`getInvHeat`, `getItemHeat`, `getHeat`, `getJobDelta`,
-  `getJobType`, `isTainted`, `isFrozen`, `isFavouriteRecipeInput`,
-  `updateWetness`) and `Core.getOptionByName`. This is the same for the
-  player's own inventory.
+- UI render errors (`prerender`/`render` of Lua panels) do not reach the
+  game log, so `ingame-stable` stays green when a panel stops drawing.
+  Find them with `pz-ctl lua 'return pcall(function() <panel>:renderdetails(false) end)'`.
+  `InventoryItem.isFavouriteRecipeInput` answers false only while the item's
+  script is used in no recipe (`usedInRecipes` is never filled in pz-rs);
+  otherwise it fails with TODO(crafting).
 - `ItemCodeOnCreate.*` `no_such_function` lines are expected: most item
   OnCreate handlers are not ported yet (RecipeMagazine, RandomColor and
   IDCard are).

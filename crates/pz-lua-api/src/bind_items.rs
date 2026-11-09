@@ -993,6 +993,35 @@ fn register_inventory_item(thread: &mut Thread) {
     get!(b, "isCustomWeight", |i| Value::from(i.custom_weight));
     get!(b, "isCustomName", |i| Value::from(i.custom_name));
     get!(b, "isFavorite", |i| Value::from(i.favorite));
+    get!(b, "getJobDelta", |i| f(i.job_delta));
+    b.method("setJobDelta", |c| {
+        let delta = num_arg(c, 1) as f32;
+        this(c)?.borrow_mut().job_delta = delta;
+        Ok(0)
+    });
+    get!(b, "getJobType", |i| opt_str(i.job_type.as_deref()));
+    b.method("setJobType", |c| {
+        let job = str_arg(c, 1).map(|s| s.to_string());
+        this(c)?.borrow_mut().job_type = job;
+        Ok(0)
+    });
+    get!(b, "getItemHeat", |i| f(i.get_item_heat()));
+    // `1.0F - this.itemHeat`.
+    get!(b, "getInvHeat", |i| f(1.0 - i.item_heat));
+    b.method("isFavouriteRecipeInput", |c| {
+        let item = this(c)?;
+        let script = crate::item_tooltip::script(&item.borrow());
+        // `scriptItem == null` is false; `Item.getUsedInRecipes(player,
+        // list)` returns the empty list before reading the player.
+        let used = script.is_some_and(|s| !s.borrow().used_in_recipes().is_empty());
+        if used {
+            return Err(LuaError::runtime(
+                "TODO(crafting): InventoryItem.isFavouriteRecipeInput for an item used in recipes \
+                 (CraftRecipe.needToBeLearn, isRecipeActuallyKnown, IsoPlayer.isFavouriteRecipe)",
+            ));
+        }
+        Ok(c.push(false))
+    });
     get!(b, "isActivated", |i| Value::from(i.activated));
     get!(b, "isInfected", |i| Value::from(i.zombie_infected));
     get!(b, "getColorRed", |i| f(i.color_red));
@@ -1629,6 +1658,8 @@ fn register_drainable(thread: &mut Thread) {
         .map(Value::from)
         .unwrap_or_default());
     get!(b, "getWeightEmpty", |i| f(i.template.weight_empty));
+    // `DrainableComboItem.heat`, set to 1 by its constructors.
+    get!(b, "getHeat", |i| i.drainable_heat.map(f).unwrap_or_default());
     get!(b, "getOnEat", |i| opt_str(i.get_on_eat()));
     get!(b, "isEmptyUses", |i| Value::from(
         i.get_current_uses_float() <= 0.0
@@ -1812,6 +1843,10 @@ pub fn register(thread: &mut Thread) {
 #[cfg(test)]
 #[path = "bind_items/moddata_tests.rs"]
 mod moddata_tests;
+
+#[cfg(test)]
+#[path = "bind_items/pane_row_tests.rs"]
+mod pane_row_tests;
 
 #[cfg(test)]
 mod tests {
